@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="2.0.2"
+VERSION="1.0.0"
 REPO_URL="https://github.com/nickforshee/m3u8.git"
 RELEASE_API="https://api.github.com/repos/homebridge/ffmpeg-for-homebridge/releases/latest"
 TEMP_DIR=""
