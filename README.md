@@ -4,7 +4,7 @@ A self-contained Bash command for downloading authorized HLS (`.m3u8`) streams w
 
 ## Highlights
 
-- Native FFmpeg builds for Apple Silicon, Intel macOS, Linux x86-64, and Linux ARM64
+- Automatic FFmpeg setup: pre-built binary on macOS (Homebrew fallback included), package manager or static build on Linux
 - Interactive installer with update, reconfigure, and reinstall modes
 - Use bundled FFmpeg, a system FFmpeg, or a custom executable
 - PATH, symlink, or no-shell-modification installation modes
@@ -96,15 +96,17 @@ m3u8 --doctor
 
 Reports the version, install root, config status, platform, FFmpeg version/path, output-directory writability, shell profile, alias, and curl availability.
 
-## FFmpeg integrity
+## FFmpeg acquisition
 
-The installer downloads FFmpeg over TLS and attempts to read the release asset's SHA-256 digest from GitHub's release API. When a digest is available, it verifies the archive before extraction. A checksum may also be forced explicitly:
+**macOS:** The installer downloads a pre-built binary from the homebridge/ffmpeg-for-homebridge release over TLS. It then attempts to read the release asset's SHA-256 digest from GitHub's release API and verifies the archive before extraction. If the download fails, the installer falls back to `brew install ffmpeg`. A checksum may also be forced explicitly:
 
 ```bash
 M3U8_FFMPEG_SHA256="expected-64-character-sha256" ./install.sh
 ```
 
 If the upstream release does not publish a digest, the installer prints a warning rather than claiming verification occurred.
+
+**Linux:** The installer first attempts to install FFmpeg via the system package manager (`apt-get`, `dnf`, `yum`, `pacman`, or `zypper`). If that is unavailable or fails, it downloads a GPL static build from BtbN/FFmpeg-Builds for the current architecture.
 
 ## Non-interactive install settings
 
@@ -145,6 +147,7 @@ The uninstaller removes only the marked shell block and symlinks that still poin
 - Bash
 - macOS or Linux on a supported architecture
 - `curl` and `tar` when downloading FFmpeg
+- `xz` on Linux when the static-build fallback is used (`apt-get install xz-utils` or equivalent)
 - Git only when the installer needs to clone the repository
 - Optional clipboard helpers: `pbpaste`, `wl-paste`, or `xclip`
 

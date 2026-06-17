@@ -24,6 +24,7 @@ find_source(){ local d; d="$(script_dir || true)"; if [[ -f "$d/m3u8" ]]; then S
 platform_key(){ case "$(uname -s):$(uname -m)" in Darwin:arm64|Darwin:aarch64) echo darwin-arm64;; Darwin:x86_64|Darwin:amd64) echo darwin-x86_64;; Linux:x86_64|Linux:amd64) echo linux-x86_64;; Linux:aarch64|Linux:arm64) echo linux-aarch64;; *) fail "Unsupported platform: $(uname -s) $(uname -m)";; esac; }
 asset_name(){ echo "ffmpeg-$(platform_key).tar.gz"; }
 asset_url(){ echo "https://github.com/homebridge/ffmpeg-for-homebridge/releases/latest/download/$(asset_name)"; }
+linux_asset_url(){ case "$(uname -m)" in x86_64|amd64) echo "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz";; aarch64|arm64) echo "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linuxarm64-gpl.tar.xz";; *) fail "Unsupported Linux architecture: $(uname -m)";; esac; }
 sha256_file(){ if command -v shasum >/dev/null; then shasum -a 256 "$1" | awk '{print $1}'; elif command -v sha256sum >/dev/null; then sha256sum "$1" | awk '{print $1}'; else return 1; fi; }
 release_digest(){
   command -v curl >/dev/null || return 1
@@ -33,6 +34,7 @@ release_digest(){
   printf '%s' "$segment" | sed -nE 's/.*"digest": "sha256:([a-fA-F0-9]{64})".*/\1/p'
 }
 verify_archive(){ local archive="$1" expected actual; expected="${M3U8_FFMPEG_SHA256:-$(release_digest || true)}"; if [[ -z "$expected" ]]; then warn "No published SHA-256 digest was available; TLS download validation still applies."; return; fi; actual="$(sha256_file "$archive" || true)"; [[ -n "$actual" ]] || fail "No SHA-256 utility is available."; [[ "$actual" == "$expected" ]] || fail "FFmpeg checksum verification failed."; success "Verified FFmpeg SHA-256 checksum."; }
+try_pkg_manager(){ if command -v apt-get >/dev/null 2>&1; then info "Installing FFmpeg via apt-get..."; sudo apt-get install -y ffmpeg >/dev/null 2>&1 && { FFMPEG_PATH="$(command -v ffmpeg)"; return 0; }; elif command -v dnf >/dev/null 2>&1; then info "Installing FFmpeg via dnf..."; sudo dnf install -y ffmpeg >/dev/null 2>&1 && { FFMPEG_PATH="$(command -v ffmpeg)"; return 0; }; elif command -v yum >/dev/null 2>&1; then info "Installing FFmpeg via yum..."; sudo yum install -y ffmpeg >/dev/null 2>&1 && { FFMPEG_PATH="$(command -v ffmpeg)"; return 0; }; elif command -v pacman >/dev/null 2>&1; then info "Installing FFmpeg via pacman..."; sudo pacman -S --noconfirm ffmpeg >/dev/null 2>&1 && { FFMPEG_PATH="$(command -v ffmpeg)"; return 0; }; elif command -v zypper >/dev/null 2>&1; then info "Installing FFmpeg via zypper..."; sudo zypper install -y ffmpeg >/dev/null 2>&1 && { FFMPEG_PATH="$(command -v ffmpeg)"; return 0; }; fi; return 1; }
 
 config_get(){ local file="$1" key="$2" line; [[ -r "$file" ]] || return 1; line="$(grep -E "^${key}=" "$file" | tail -n1 || true)"; [[ -n "$line" ]] || return 1; line="${line#*=}"; line="${line#\"}"; line="${line%\"}"; printf '%s\n' "$line"; }
 write_config(){ cat >"$CONFIG_PATH" <<CFG
@@ -82,8 +84,28 @@ install_ffmpeg(){
   FFMPEG_PATH="$TOOLS_DIR/ffmpeg"
   if [[ -f "$SOURCE_DIR/ffmpeg" ]]; then cp "$SOURCE_DIR/ffmpeg" "$FFMPEG_PATH"; chmod 755 "$FFMPEG_PATH"; return; fi
   command -v curl >/dev/null || fail "curl is required."; command -v tar >/dev/null || fail "tar is required."
-  [[ -n "$TEMP_DIR" ]] || TEMP_DIR="$(mktemp -d)"; archive="$TEMP_DIR/ffmpeg.tar.gz"; unpacked="$TEMP_DIR/unpacked"
-  info "Downloading FFmpeg for $(platform_key)..."; curl -fL --retry 3 --progress-bar "$(asset_url)" -o "$archive"; verify_archive "$archive"; mkdir -p "$unpacked"; tar -xzf "$archive" -C "$unpacked"; found="$(find "$unpacked" -type f -name ffmpeg -print -quit)"; [[ -n "$found" ]] || fail "Archive did not contain FFmpeg."; cp "$found" "$FFMPEG_PATH"; chmod 755 "$FFMPEG_PATH"
+  [[ -n "$TEMP_DIR" ]] || TEMP_DIR="$(mktemp -d)"; unpacked="$TEMP_DIR/unpacked"
+  if [[ "$(uname -s)" == Linux ]]; then
+    info "Attempting FFmpeg installation via system package manager..."
+    if try_pkg_manager; then success "FFmpeg installed via package manager at $FFMPEG_PATH"; return; fi
+    warn "Package manager installation failed or unavailable; downloading static build..."
+    command -v xz >/dev/null || fail "xz is required to extract the FFmpeg archive. Install it (e.g. apt-get install xz-utils) and retry."
+    archive="$TEMP_DIR/ffmpeg.tar.xz"
+    info "Downloading FFmpeg static build for Linux $(uname -m)..."; curl -fL --retry 3 --progress-bar "$(linux_asset_url)" -o "$archive"
+    mkdir -p "$unpacked"; tar -xJf "$archive" -C "$unpacked"
+  else
+    archive="$TEMP_DIR/ffmpeg.tar.gz"; mkdir -p "$unpacked"
+    info "Downloading FFmpeg for $(platform_key)..."
+    if curl -fL --retry 3 --progress-bar "$(asset_url)" -o "$archive" 2>/dev/null; then
+      verify_archive "$archive"; tar -xzf "$archive" -C "$unpacked"
+    else
+      warn "FFmpeg download failed; trying Homebrew..."
+      command -v brew >/dev/null 2>&1 || fail "FFmpeg download failed and Homebrew is not available. Install FFmpeg manually and set M3U8_FFMPEG."
+      info "Installing FFmpeg via Homebrew..."; brew install ffmpeg || fail "Homebrew FFmpeg installation failed. Install FFmpeg manually and set M3U8_FFMPEG."
+      FFMPEG_PATH="$(command -v ffmpeg)"; success "FFmpeg installed via Homebrew at $FFMPEG_PATH"; return
+    fi
+  fi
+  found="$(find "$unpacked" -type f -name ffmpeg -print -quit)"; [[ -n "$found" ]] || fail "Archive did not contain FFmpeg."; cp "$found" "$FFMPEG_PATH"; chmod 755 "$FFMPEG_PATH"
 }
 
 existing_action(){
